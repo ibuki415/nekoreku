@@ -63,22 +63,52 @@ type Props = {
   userId: string | null; // ログイン中ならクラウドの猫も取得する
 };
 
-// ピンの見た目（HTML要素）を作る
+// ピンの見た目（HTML要素）を作る。
+// 丸い写真の下にしずく形の「とがり」を付け、その先端が撮影した地点を指す（anchor: "bottom"）。
+// ※ marker の要素そのものの transform は MapLibre が位置合わせに使うので、拡大は内側(.pin-inner)で行う
 function createPinElement(cat: MapCat) {
+  const color = STATUS_COLOR[cat.status];
   const el = document.createElement("button");
   el.type = "button";
-  el.setAttribute("aria-label", cat.name);
-  el.style.cssText = `width:54px;height:54px;border-radius:9999px;padding:0;cursor:pointer;
-    border:4px solid ${STATUS_COLOR[cat.status]};background:#fff;overflow:hidden;
-    box-shadow:0 3px 10px rgba(0,0,0,.35);transition:transform .15s;`;
+  el.setAttribute("aria-label", `${cat.name}（${cat.placeName}で撮影）`);
+  el.style.cssText = "padding:0;border:0;background:none;cursor:pointer;";
+  const inner = document.createElement("div");
+  inner.className = "pin-inner";
+  inner.style.cssText = `display:flex;flex-direction:column;align-items:center;transform-origin:50% 100%;
+    transition:transform .15s;filter:drop-shadow(0 3px 5px rgba(0,0,0,.35));`;
+  const circle = document.createElement("div");
+  circle.style.cssText = `width:54px;height:54px;border-radius:9999px;border:4px solid ${color};
+    background:#fff;overflow:hidden;box-sizing:border-box;`;
   const img = document.createElement("img");
   img.src = cat.stickerUrl;
   img.alt = "";
   img.draggable = false;
   img.style.cssText = "width:100%;height:100%;object-fit:contain;display:block;";
-  el.appendChild(img);
+  circle.appendChild(img);
+  const tail = document.createElement("div");
+  tail.style.cssText = `width:0;height:0;margin-top:-2px;border-left:9px solid transparent;
+    border-right:9px solid transparent;border-top:13px solid ${color};`;
+  inner.append(circle, tail);
+  el.appendChild(inner);
   return el;
 }
+
+// 2点間の距離（メートル）。地球を球として計算（ハバーサイン公式）
+function distanceMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const R = 6371000;
+  const rad = (d: number) => (d * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat);
+  const dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function formatDistance(m: number) {
+  if (m < 1000) return `${Math.max(10, Math.round(m / 10) * 10)}m`;
+  return `${(m / 1000).toFixed(m < 10000 ? 1 : 0)}km`;
+}
+
+type MyPos = { lat: number; lng: number };
 
 // 国バブルの見た目（国旗＋件数）
 function createBubbleElement(b: Bubble) {
@@ -107,6 +137,9 @@ export default function CatMap({ cats: localCats, focusId, focusPos, userId }: P
   const [cloudCats, setCloudCats] = useState<MapCat[]>([]);
   const [cloudCounts, setCloudCounts] = useState<CountryCount[] | null>(null);
   const [cloudError, setCloudError] = useState(false);
+  const [me, setMe] = useState<MyPos | null>(null); // 自分の現在地（取れたら青い点で表示）
+  const [geoNote, setGeoNote] = useState<string | null>(null); // 現在地が取れないときの一言
+  const meMarkerRef = useRef<Marker | null>(null);
 
   // 初期表示の計算に使う値は「最初の1回だけ」読めればよいので ref に退避
   const initial = useRef({ cats: localCats, focusId, focusPos });
@@ -171,12 +204,6 @@ export default function CatMap({ cats: localCats, focusId, focusPos, userId }: P
       map = new ml.Map(opts);
       mapRef.current = map;
 
-      // 現在地ボタン（右上）
-      map.addControl(
-        new ml.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: false }),
-        "top-right",
-      );
-
       map.on("error", () => {
         // スタイル自体が読めないときだけエラー表示（タイル1枚の失敗は無視）
         if (map && !map.isStyleLoaded() && !map.loaded()) setMapError(true);
@@ -215,6 +242,16 @@ export default function CatMap({ cats: localCats, focusId, focusPos, userId }: P
             firstSymbol,
           );
         }
+        // 選んだ猫と現在地を結ぶ点線（中身は後の effect で入れる）
+        map.addSource("me-line", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        map.addLayer({
+          id: "me-line",
+          type: "line",
+          source: "me-line",
+          layout: { "line-cap": "round" },
+          paint: { "line-color": "#1a73e8", "line-width": 3, "line-dasharray": [0.5, 2] },
+        });
+
         setLowZoom(map.getZoom() < BUBBLE_ZOOM);
         setReady(true);
       });
@@ -238,6 +275,8 @@ export default function CatMap({ cats: localCats, focusId, focusPos, userId }: P
       markers.clear();
       bubbleMarkers.forEach((m) => m.remove());
       bubbleMarkers.length = 0;
+      meMarkerRef.current?.remove();
+      meMarkerRef.current = null;
       map?.remove();
       mapRef.current = null;
       setReady(false);
@@ -358,10 +397,89 @@ export default function CatMap({ cats: localCats, focusId, focusPos, userId }: P
   // ---- 選択中のピンを少し大きく ----
   useEffect(() => {
     markersRef.current.forEach(({ el }, id) => {
-      el.style.transform = id === selectedId ? "scale(1.25)" : "scale(1)";
+      const inner = el.querySelector<HTMLElement>(".pin-inner");
+      if (inner) inner.style.transform = id === selectedId ? "scale(1.25)" : "scale(1)";
       el.style.zIndex = id === selectedId ? "2" : "1";
     });
   }, [selectedId, cats, ready, lowZoom]);
+
+  // ---- 現在地を追いかける（歩くと青い点も動く）----
+  useEffect(() => {
+    if (!ready) return;
+    if (!("geolocation" in navigator)) return; // 非対応端末はボタンを押したときに案内する
+    const id = navigator.geolocation.watchPosition(
+      (p) => {
+        setMe({ lat: p.coords.latitude, lng: p.coords.longitude });
+        setGeoNote(null);
+      },
+      (err) => {
+        setGeoNote(
+          err.code === err.PERMISSION_DENIED
+            ? "位置情報がオフです（設定 → Safari → 位置情報 で許可）"
+            : "現在地を取得できませんでした",
+        );
+      },
+      { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 },
+    );
+    return () => navigator.geolocation.clearWatch(id);
+  }, [ready]);
+
+  // ---- 現在地の青い点を置く・動かす ----
+  useEffect(() => {
+    const map = mapRef.current;
+    const ml = mlRef.current;
+    if (!ready || !map || !ml || !me) return;
+    if (!meMarkerRef.current) {
+      const el = document.createElement("div");
+      el.className = "me-dot";
+      el.style.zIndex = "3";
+      el.setAttribute("aria-label", "現在地");
+      meMarkerRef.current = new ml.Marker({ element: el, anchor: "center" }).setLngLat([me.lng, me.lat]).addTo(map);
+    } else {
+      meMarkerRef.current.setLngLat([me.lng, me.lat]);
+    }
+  }, [me, ready]);
+
+  const selected = lowZoom ? null : (cats.find((c) => c.id === selectedId) ?? null);
+  // 端末内の猫は正確な位置。クラウドの猫はプライバシーのため約1km単位に丸めてある
+  const selectedIsApprox = !!selected && !localCats.some((c) => c.id === selected.id);
+  const selectedDistance = selected && me ? distanceMeters(me, selected) : null;
+
+  // ---- 選んだ猫と現在地を点線で結ぶ ----
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return;
+    const src = map.getSource("me-line") as import("maplibre-gl").GeoJSONSource | undefined;
+    if (!src) return;
+    src.setData(
+      selected && me
+        ? {
+            type: "Feature",
+            properties: {},
+            geometry: { type: "LineString", coordinates: [[me.lng, me.lat], [selected.lng, selected.lat]] },
+          }
+        : { type: "FeatureCollection", features: [] },
+    );
+  }, [selected, me, ready]);
+
+  // 現在地ボタン：現在地へ移動（猫を選んでいるときは、自分と猫が両方入るように）
+  const goToMe = () => {
+    const map = mapRef.current;
+    const ml = mlRef.current;
+    if (!map || !ml) return;
+    if (!me) {
+      setGeoNote((n) =>
+        !("geolocation" in navigator) ? "この端末では現在地を使えません" : (n ?? "現在地を探しています…"),
+      );
+      return;
+    }
+    if (selected) {
+      const b = new ml.LngLatBounds([me.lng, me.lat], [me.lng, me.lat]).extend([selected.lng, selected.lat]);
+      map.fitBounds(b, { padding: { top: 120, bottom: 200, left: 60, right: 60 }, maxZoom: 17 });
+    } else {
+      map.flyTo({ center: [me.lng, me.lat], zoom: Math.max(map.getZoom(), 16) });
+    }
+  };
 
   // ---- focus が後から変わったらそこへ移動（猫の一覧が増えただけでは動かさない）----
   useEffect(() => {
@@ -373,8 +491,6 @@ export default function CatMap({ cats: localCats, focusId, focusPos, userId }: P
       map.flyTo({ center: [cat.lng, cat.lat], zoom: 16 });
     }
   }, [focusId, cats, ready]);
-
-  const selected = lowZoom ? null : (cats.find((c) => c.id === selectedId) ?? null);
 
   return (
     <div className="absolute inset-x-0 top-0" style={{ bottom: "var(--tabbar-h)" }}>
@@ -413,6 +529,10 @@ export default function CatMap({ cats: localCats, focusId, focusPos, userId }: P
         className="absolute left-3 z-10 flex flex-col gap-1 rounded-2xl bg-black/65 px-3 py-2 text-[11px] font-medium text-white backdrop-blur-sm transition-[bottom]"
         style={{ bottom: selected ? 138 : 28 }}
       >
+        <li className="flex items-center gap-2">
+          <span className="h-3 w-3 rounded-full border-2 border-white bg-[#1a73e8] shadow-[0_0_0_3px_rgba(26,115,232,0.35)]" />
+          現在地
+        </li>
         {LEGEND.map((s) => (
           <li key={s} className="flex items-center gap-2">
             <span className="h-3 w-3 rounded-full border-2 border-white" style={{ background: STATUS_COLOR[s] }} />
@@ -420,6 +540,29 @@ export default function CatMap({ cats: localCats, focusId, focusPos, userId }: P
           </li>
         ))}
       </ul>
+
+      {/* 現在地ボタン（右下・ミニカードを避ける） */}
+      <button
+        type="button"
+        onClick={goToMe}
+        aria-label={selected ? "現在地と猫を両方表示" : "現在地へ移動"}
+        className="absolute right-3 z-10 grid h-12 w-12 place-items-center rounded-full bg-white text-[#1a73e8] shadow-[0_3px_12px_rgba(0,0,0,0.35)] transition-[bottom] active:scale-95"
+        style={{ bottom: selected ? 138 : 28 }}
+      >
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+          <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" />
+          <circle cx="12" cy="12" r="8" />
+          <path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3" />
+        </svg>
+      </button>
+      {geoNote && (
+        <p
+          className="absolute right-3 z-10 max-w-[70%] rounded-2xl bg-black/75 px-3 py-2 text-[11px] font-medium text-white"
+          style={{ bottom: (selected ? 138 : 28) + 56 }}
+        >
+          {geoNote}
+        </p>
+      )}
 
       {/* ピンをタップしたときのミニカード */}
       {selected && (
@@ -430,8 +573,13 @@ export default function CatMap({ cats: localCats, focusId, focusPos, userId }: P
           </div>
           <div className="min-w-0 flex-1">
             <p className="truncate text-[16px] font-extrabold">{selected.name}</p>
+            <p className="truncate text-xs font-semibold text-stone-700">
+              📍 {selected.placeName}
+              {selectedIsApprox ? " あたり" : ""}で撮影
+            </p>
             <p className="truncate text-xs text-stone-500">
-              {relativeTime(selected.caughtAt)} ・ {selected.placeName}
+              {relativeTime(selected.caughtAt)}
+              {selectedDistance !== null && ` ・ 現在地から${selectedIsApprox ? "約" : ""}${formatDistance(selectedDistance)}`}
             </p>
             <Link
               href={selected.href}

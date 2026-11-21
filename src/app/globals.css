@@ -93,3 +93,15 @@ body {
 
 /* 地図の右上ボタンがノッチに隠れないように */
 .maplibregl-ctrl-top-right { margin-top: env(safe-area-inset-top); }
+
+/* 地図の現在地マーカー（青い点＋広がる輪） */
+.me-dot { position: relative; width: 20px; height: 20px; pointer-events: none; }
+.me-dot::before {
+  content: ""; position: absolute; inset: -12px; border-radius: 9999px;
+  background: rgba(26, 115, 232, 0.28); animation: me-pulse 2s ease-out infinite;
+}
+.me-dot::after {
+  content: ""; position: absolute; inset: 0; border-radius: 9999px;
+  background: #1a73e8; border: 3px solid #fff; box-shadow: 0 1px 5px rgba(0, 0, 0, 0.45);
+}
+@keyframes me-pulse { 0% { transform: scale(0.4); opacity: 1; } 100% { transform: scale(1.5); opacity: 0; } }
