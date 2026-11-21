@@ -1,26 +1,95 @@
 @import "tailwindcss";
 
+/* ネコレクの色（撮影画面は黒基調・ファインダーは黄色・検出は青） */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0b0b0c;
+  --foreground: #f5f5f4;
+  --finder: #ffd400;
+  --detect: #38bdf8;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-finder: var(--finder);
+  --color-detect: var(--detect);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  /* 日本語が読みやすいよう、端末に入っているフォントを使う */
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN",
+    "Noto Sans JP", "Yu Gothic UI", Meiryo, sans-serif;
+  -webkit-tap-highlight-color: transparent;
 }
+
+/* タブバーの高さ（ホームバー分の余白を含む）。各ページの下余白に使う */
+:root {
+  --tabbar-h: calc(64px + env(safe-area-inset-bottom));
+}
+
+html,
+body {
+  overscroll-behavior: none;
+}
+
+/* ---- ファインダー（撮影画面の四隅ブラケット） ---- */
+.bracket {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  border: 0 solid var(--bracket-color, var(--finder));
+  transition: border-color 0.2s;
+}
+.bracket-tl { top: 0; left: 0; border-top-width: 5px; border-left-width: 5px; border-top-left-radius: 14px; }
+.bracket-tr { top: 0; right: 0; border-top-width: 5px; border-right-width: 5px; border-top-right-radius: 14px; }
+.bracket-bl { bottom: 0; left: 0; border-bottom-width: 5px; border-left-width: 5px; border-bottom-left-radius: 14px; }
+.bracket-br { bottom: 0; right: 0; border-bottom-width: 5px; border-right-width: 5px; border-bottom-right-radius: 14px; }
+
+.finder { --bracket-color: var(--finder); filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.5)); }
+/* 猫を見つけたら青く光って、ゆっくり脈打つ */
+.finder.is-found {
+  --bracket-color: var(--detect);
+  animation: finder-pulse 1.4s ease-in-out infinite;
+}
+@keyframes finder-pulse {
+  0%, 100% { transform: scale(1); filter: drop-shadow(0 0 6px var(--detect)) drop-shadow(0 0 14px var(--detect)); }
+  50% { transform: scale(1.035); filter: drop-shadow(0 0 12px var(--detect)) drop-shadow(0 0 26px var(--detect)); }
+}
+
+/* 検出した猫を囲う青い光る枠（位置は transform でなめらかに追従） */
+.cat-box {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border: 2px solid var(--detect);
+  border-radius: 18px;
+  box-shadow: 0 0 24px var(--detect), inset 0 0 18px var(--detect);
+  transition: transform 120ms linear, width 120ms linear, height 120ms linear, opacity 160ms;
+  pointer-events: none;
+}
+
+/* ---- ステッカーが「ぽんっ」と出る ---- */
+@keyframes sticker-pop {
+  0% { transform: scale(0.3) rotate(-14deg); opacity: 0; }
+  60% { transform: scale(1.12) rotate(-2deg); opacity: 1; }
+  100% { transform: scale(1) rotate(-4deg); opacity: 1; }
+}
+.sticker-pop { animation: sticker-pop 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
+
+@keyframes sheet-up {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.sheet-up { animation: sheet-up 0.28s ease-out both; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 0.9s linear infinite; }
+
+/* 地図の操作ボタンをタブバーより上に */
+.maplibregl-ctrl-bottom-right,
+.maplibregl-ctrl-bottom-left { margin-bottom: 0; }
+
+/* 地図の右上ボタンがノッチに隠れないように */
+.maplibregl-ctrl-top-right { margin-top: env(safe-area-inset-top); }

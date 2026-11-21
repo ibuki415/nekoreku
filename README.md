@@ -1,36 +1,40 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ネコレク（仮）
 
-## Getting Started
+街の猫を撮って、ステッカーカードにして集める PWA。Next.js 16 + TypeScript + Tailwind v4。
 
-First, run the development server:
+## PC で開く
 
-```bash
+```
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+→ http://localhost:3029
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## iPhone 実機で開く（HTTPS が必要）
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+カメラと位置情報は HTTPS でしか動かないため、Cloudflare の一時トンネルを使う。
 
-## Learn More
+1. ターミナル1: `npm run dev`
+2. ターミナル2: `npm run tunnel`
+3. ターミナル2に出る `https://〇〇〇.trycloudflare.com` を iPhone の Safari で開く
+   （URL は起動するたびに変わる。PC と iPhone は別の回線でも OK）
+4. 任意: 共有ボタン →「ホーム画面に追加」でアプリのように起動できる
 
-To learn more about Next.js, take a look at the following resources:
+止めるときは各ターミナルで Ctrl+C。
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 開発フェーズ
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+1. 環境準備 ← 済
+2. カメラ画面 ← 実装済
+3. 猫の検出（MediaPipe）← 実装済
+4. 背景除去（@imgly/background-removal）とカード化 ← 実装済
+5. 保存（IndexedDB）とコレクション一覧 ← 実装済
+6. 地図表示（MapLibre）← 実装済
+7. クラウド化（Supabase）← 実装済（設定は [docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md)。未設定でも端末内モードで動く）
+8. ソーシャル機能（みんなの猫の地図・コレクト・シェア画像）← 実装済（クラウド設定後に有効）
 
-## Deploy on Vercel
+## ライセンス・利用規約の注意
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- 背景除去に使っている **@imgly/background-removal は AGPL ライセンス**です。公開サービスにする場合は、ソースコード公開の義務など AGPL の条件を確認してください（商用の別ライセンスもあります）。
+- 地名の取得に **OpenStreetMap の Nominatim** を使っています。利用規約により「1秒に1回まで」「アプリを識別できること」が求められます。1回の撮影につき1回だけ呼ぶ作り方にしています。
+- 地図は OpenFreeMap（無料）です。地図右下の帰属表示（© OpenStreetMap contributors など）は消さないでください。
