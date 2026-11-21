@@ -97,7 +97,7 @@ function CaughtList({ cats, error }: { cats: CatRecord[] | null; error: boolean 
   );
 }
 
-// 他の人の猫を集めたもの（ログインが必要）
+// 他の人の猫を集めたもの（合言葉で参加が必要）
 function CollectedList() {
   const { user, loading } = useSession();
   const userId = user?.id ?? null;
@@ -123,10 +123,10 @@ function CollectedList() {
         <p className="text-[15px] leading-relaxed text-stone-300">
           コレクトした猫を見るには
           <br />
-          ログインが必要です
+          合言葉で参加してください
         </p>
         <Link href="/account" className="grid h-12 place-items-center rounded-full bg-finder px-8 text-[15px] font-bold text-black">
-          ログインする
+          参加する
         </Link>
       </div>
     );

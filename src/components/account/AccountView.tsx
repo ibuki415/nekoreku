@@ -1,33 +1,31 @@
 "use client";
-// マイページ：ログイン（メールの6桁コード）・表示名・クラウド同期。
+// マイページ：合言葉で参加・表示名・クラウド同期。
 // クラウド未設定のときは案内だけ出す（端末内モード）
 
 import { useCallback, useEffect, useState } from "react";
 import { useSession } from "@/hooks/useSession";
 import { fetchProfile, importMyCats, updateDisplayName, uploadUnsynced } from "@/lib/cloud";
 import { listCats } from "@/lib/db";
+import { joinWithPassphrase } from "@/lib/membership";
 import { getSupabase, isCloudEnabled } from "@/lib/supabase";
 import EnvCheck from "../EnvCheck";
 
-// supabase-js のエラーを日本語にする（code / status / message のどれかで判定）
-function authErrorMessage(e: unknown): string {
+// 参加時のエラーを日本語にする（code / status / message のどれかで判定）
+function joinErrorMessage(e: unknown): string {
   const err = e as { code?: string; status?: number; message?: string } | null;
   const code = err?.code ?? "";
   const msg = (err?.message ?? "").toLowerCase();
-  if (code === "otp_expired" || msg.includes("expired") || msg.includes("invalid")) {
-    return "コードが違うか、期限が切れています。もう一度確かめるか、コードを再送してください。";
+  if (msg.includes("too_many_attempts")) {
+    return "合言葉のまちがいが続いたので、しばらく受け付けていません。15分ほど待ってからやり直してください。";
   }
-  if (
-    err?.status === 429 ||
-    code.includes("rate_limit") ||
-    msg.includes("rate limit") ||
-    msg.includes("too many") ||
-    msg.includes("security purposes")
-  ) {
-    return "短時間に何度も送られました。少し待ってからやり直してください。";
+  if (msg.includes("passphrase_not_set")) {
+    return "合言葉がまだ設定されていません（管理者は docs/SUPABASE_SETUP.md の手順を確認してください）。";
   }
-  if (code === "validation_failed" || msg.includes("email")) {
-    return "メールアドレスを確かめてください。";
+  if (code.includes("anonymous_provider_disabled") || msg.includes("anonymous sign-ins are disabled")) {
+    return "Supabase の「匿名ログイン」がオフになっています（管理者向け: docs/SUPABASE_SETUP.md）。";
+  }
+  if (err?.status === 429 || code.includes("rate_limit") || msg.includes("rate limit") || msg.includes("too many")) {
+    return "短時間に何度も試されました。少し待ってからやり直してください。";
   }
   if (msg.includes("fetch") || msg.includes("network")) {
     return "通信できませんでした。ネットワークを確認してください。";
@@ -66,123 +64,70 @@ function LocalOnlyNotice() {
 function CloudAccount() {
   const { user, loading } = useSession();
   if (loading) return <p className="text-sm text-stone-500">読み込み中…</p>;
-  return user ? <Profile userId={user.id} email={user.email ?? ""} /> : <LoginForm />;
+  return user ? <Profile userId={user.id} /> : <JoinForm />;
 }
 
-// ---------- ログイン（メール → 6桁コード） ----------
-function LoginForm() {
-  const [email, setEmail] = useState("");
-  const [code, setCode] = useState("");
-  const [step, setStep] = useState<"email" | "code">("email");
+// ---------- 参加（みんな共通の合言葉） ----------
+function JoinForm() {
+  const [word, setWord] = useState("");
+  const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [info, setInfo] = useState("");
 
-  const sendCode = async () => {
-    const sb = getSupabase();
-    const addr = email.trim();
-    if (!sb) return;
-    if (!/^\S+@\S+\.\S+$/.test(addr)) {
-      setError("メールアドレスを確かめてください。");
-      return;
-    }
+  const join = async () => {
+    const w = word.trim();
+    if (!w) return;
     setBusy(true);
     setError("");
     try {
-      const { error: err } = await sb.auth.signInWithOtp({ email: addr, options: { shouldCreateUser: true } });
-      if (err) throw err;
-      setStep("code");
-      setInfo(`${addr} に6桁のコードを送りました。`);
-    } catch (e) {
-      setError(authErrorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const verify = async () => {
-    const sb = getSupabase();
-    const token = code.replace(/\s/g, "");
-    if (!sb) return;
-    if (!/^\d{6}$/.test(token)) {
-      setError("6桁の数字を入れてください。");
-      return;
-    }
-    setBusy(true);
-    setError("");
-    try {
-      const { error: err } = await sb.auth.verifyOtp({ email: email.trim(), token, type: "email" });
-      if (err) throw err;
+      const ok = await joinWithPassphrase(w);
+      if (!ok) setError("合言葉が違います。");
       // 成功すると useSession が変化を検知して画面が切り替わる
     } catch (e) {
-      setError(authErrorMessage(e));
+      setError(joinErrorMessage(e));
+    } finally {
       setBusy(false);
     }
   };
 
   return (
     <section className={`${card} flex flex-col gap-3`}>
-      <p className="text-[15px] font-bold">ログイン</p>
-      {step === "email" ? (
-        <>
-          <p className="text-sm leading-relaxed text-stone-400">
-            メールアドレスにコードを送ります。パスワードは要りません。はじめての方は自動で登録されます。
-          </p>
-          <input
-            type="email"
-            inputMode="email"
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
-            aria-label="メールアドレス"
-            className={input}
-          />
-          <button type="button" onClick={sendCode} disabled={busy || !email} className={primaryBtn}>
-            {busy ? "送信中…" : "コードを送る"}
-          </button>
-        </>
-      ) : (
-        <>
-          <p className="text-sm leading-relaxed text-stone-400">{info} メールに書かれた数字を入れてください。</p>
-          <input
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            maxLength={6}
-            value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-            placeholder="123456"
-            aria-label="6桁のコード"
-            className={`${input} text-center text-[22px] tracking-[0.4em]`}
-          />
-          <button type="button" onClick={verify} disabled={busy || code.length !== 6} className={primaryBtn}>
-            {busy ? "確認中…" : "ログイン"}
-          </button>
-          <div className="flex justify-between text-xs text-stone-400">
-            <button
-              type="button"
-              onClick={() => {
-                setStep("email");
-                setCode("");
-                setError("");
-              }}
-              className="py-2 underline underline-offset-2"
-            >
-              メールアドレスを変える
-            </button>
-            <button type="button" onClick={sendCode} disabled={busy} className="py-2 underline underline-offset-2">
-              コードを再送
-            </button>
-          </div>
-        </>
-      )}
+      <p className="text-[15px] font-bold">合言葉で参加</p>
+      <p className="text-sm leading-relaxed text-stone-400">
+        仲間うちの合言葉を入れると、みんなの猫を地図で見たり、コレクトしたりできます。メールアドレスは要りません。
+      </p>
+      <div className="relative">
+        <input
+          type={show ? "text" : "password"}
+          autoComplete="off"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          value={word}
+          onChange={(e) => setWord(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && void join()}
+          placeholder="合言葉"
+          aria-label="合言葉"
+          className={`${input} pr-16`}
+        />
+        <button
+          type="button"
+          onClick={() => setShow((v) => !v)}
+          className="absolute inset-y-0 right-3 text-xs font-semibold text-stone-500"
+        >
+          {show ? "隠す" : "表示"}
+        </button>
+      </div>
+      <button type="button" onClick={join} disabled={busy || !word.trim()} className={primaryBtn}>
+        {busy ? "確認中…" : "参加する"}
+      </button>
       {error && <p className="text-xs leading-relaxed text-red-400">{error}</p>}
     </section>
   );
 }
 
 // ---------- ログイン後 ----------
-function Profile({ userId, email }: { userId: string; email: string }) {
+function Profile({ userId }: { userId: string }) {
   const [name, setName] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [nameMsg, setNameMsg] = useState("");
@@ -277,15 +222,25 @@ function Profile({ userId, email }: { userId: string; email: string }) {
     }
   };
 
+  // 匿名アカウントなので、ログアウトすると二度と同じアカウントに戻れない。必ず確認する
   const logout = async () => {
+    const ok = window.confirm(
+      "この端末から参加をやめます。\n\n" +
+        "メール登録の無いアカウントなので、もう一度合言葉を入れても「別の人」として扱われます。" +
+        "クラウドに保存した猫は、あなたの猫として編集・削除できなくなります（端末内の猫は残ります）。\n\n" +
+        "本当にやめますか？",
+    );
+    if (!ok) return;
     await getSupabase()?.auth.signOut();
   };
 
   return (
     <>
       <section className={`${card} flex flex-col gap-3`}>
-        <p className="text-[15px] font-bold">ログイン中</p>
-        <p className="break-all text-xs text-stone-400">{email}</p>
+        <p className="text-[15px] font-bold">参加中</p>
+        <p className="text-xs leading-relaxed text-stone-400">
+          アカウントはこの端末（このブラウザ）の中にあります。Safari の履歴とデータを消したり、機種変更したりすると元に戻せません。
+        </p>
         <label className="text-xs text-stone-400" htmlFor="display-name">
           表示名（他の人に見えます）
         </label>
@@ -333,7 +288,7 @@ function Profile({ userId, email }: { userId: string; email: string }) {
       </section>
 
       <button type="button" onClick={logout} className="h-11 px-6 text-sm text-stone-400 underline underline-offset-2">
-        ログアウト
+        参加をやめる（ログアウト）
       </button>
     </>
   );

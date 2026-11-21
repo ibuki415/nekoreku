@@ -5,10 +5,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useObjectUrl } from "@/hooks/useObjectUrl";
-import { fetchCloudCat, fetchProfile, syncDelete, syncRename } from "@/lib/cloud";
+import { currentUserId, fetchCloudCat, fetchProfile, syncDelete, syncRename } from "@/lib/cloud";
 import { deleteCat, getCat, updateCat, type CatRecord } from "@/lib/db";
 import { shareCardImage } from "@/lib/renderCard";
-import { getSupabase, isCloudEnabled } from "@/lib/supabase";
+import { isCloudEnabled } from "@/lib/supabase";
 import CatCard from "./CatCard";
 import { EditIcon, MapIcon, TrashIcon } from "./icons";
 
@@ -55,7 +55,7 @@ export default function CatDetail({ id }: { id: string }) {
     try {
       // ログイン中なら表示名を載せる。それ以外は「わたし」
       let ownerName = "わたし";
-      const uid = (await getSupabase()?.auth.getSession())?.data.session?.user.id;
+      const uid = await currentUserId();
       if (uid) ownerName = (await fetchProfile(uid).catch(() => null))?.display_name || ownerName;
       const r = await shareCardImage({
         name: cat.name,

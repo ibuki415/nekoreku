@@ -94,7 +94,7 @@ export default function CloudCatDetail({ id }: { id: string }) {
   if (!isCloudEnabled) return <Message text="クラウド機能は未設定です" action={{ href: "/account", label: "マイページへ" }} />;
   if (loading) return <p className="p-10 text-center text-sm text-stone-500">読み込み中…</p>;
   if (!userId) {
-    return <Message text="みんなの猫を見るにはログインが必要です" action={{ href: "/account", label: "ログインする" }} />;
+    return <Message text="みんなの猫を見るには合言葉で参加してください" action={{ href: "/account", label: "参加する" }} />;
   }
   if (cat === undefined) return <p className="p-10 text-center text-sm text-stone-500">読み込み中…</p>;
   if (cat === null) {

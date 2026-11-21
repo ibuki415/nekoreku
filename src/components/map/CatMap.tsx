@@ -515,7 +515,7 @@ export default function CatMap({ cats: localCats, focusId, focusPos, userId }: P
           href="/account"
           className="absolute left-3 top-[calc(env(safe-area-inset-top)+12px)] z-10 rounded-full bg-black/70 px-4 py-2 text-xs font-semibold text-white backdrop-blur-sm"
         >
-          ログインすると、みんなの猫が見えます
+          合言葉で参加すると、みんなの猫が見えます
         </Link>
       )}
       {cloudError && (

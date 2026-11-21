@@ -130,42 +130,126 @@ create trigger collections_count
   for each row execute function public.update_collect_count();
 
 -- =========================================================
+-- 2.5 合言葉で参加（メール不要）
+--   アプリは「匿名ログイン」で名無しのアカウントを作り、合言葉が合ったときだけ
+--   members に登録する。下の RLS で「members にいる人だけ」が読み書きできる。
+--   合言葉はハッシュ（元に戻せない形）でしか保存しない。設定方法は docs/SUPABASE_SETUP.md
+-- =========================================================
+
+create extension if not exists pgcrypto with schema extensions;
+
+-- 合言葉のハッシュ（1行だけ）。RLS をオンにしてポリシー無し＝アプリからは一切読めない
+create table if not exists public.app_settings (
+  id int primary key default 1 check (id = 1),
+  passphrase_hash text
+);
+alter table public.app_settings enable row level security;
+revoke all on public.app_settings from anon, authenticated;
+
+-- 参加済みのユーザー
+create table if not exists public.members (
+  user_id uuid primary key references auth.users (id) on delete cascade,
+  joined_at timestamptz not null default now()
+);
+alter table public.members enable row level security;
+drop policy if exists "members_select_own" on public.members;
+create policy "members_select_own" on public.members
+  for select to authenticated using (user_id = auth.uid());
+
+-- 合言葉の失敗記録（総当たり対策。アプリからは読めない）
+create table if not exists public.join_failures (
+  at timestamptz not null default now()
+);
+alter table public.join_failures enable row level security;
+revoke all on public.join_failures from anon, authenticated;
+
+-- 自分が参加済みか（RLS の中でも使う）
+create or replace function public.is_member()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (select 1 from public.members where user_id = auth.uid());
+$$;
+revoke execute on function public.is_member() from public, anon;
+grant execute on function public.is_member() to authenticated;
+
+-- 合言葉を確かめて、合っていれば参加させる。
+-- 全体で15分に20回まちがえたら、しばらく受け付けない（総当たり対策）
+create or replace function public.join_with_passphrase(p text)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  h text;
+begin
+  if auth.uid() is null then
+    raise exception 'not_signed_in';
+  end if;
+  if exists (select 1 from public.members where user_id = auth.uid()) then
+    return true;
+  end if;
+  if (select count(*) from public.join_failures where at > now() - interval '15 minutes') >= 20 then
+    raise exception 'too_many_attempts';
+  end if;
+  select passphrase_hash into h from public.app_settings where id = 1;
+  if h is null then
+    raise exception 'passphrase_not_set';
+  end if;
+  if extensions.crypt(coalesce(p, ''), h) = h then
+    insert into public.members (user_id) values (auth.uid()) on conflict do nothing;
+    return true;
+  end if;
+  insert into public.join_failures default values;
+  delete from public.join_failures where at < now() - interval '1 day';
+  return false;
+end;
+$$;
+revoke execute on function public.join_with_passphrase(text) from public, anon;
+grant execute on function public.join_with_passphrase(text) to authenticated;
+
+-- =========================================================
 -- 3. RLS（行レベルセキュリティ）
+--   どのテーブルも「合言葉で参加済み（is_member）」が前提
 -- =========================================================
 
 alter table public.profiles enable row level security;
 alter table public.cats enable row level security;
 alter table public.collections enable row level security;
 
--- profiles：ログイン中なら誰でも読める。変更・作成は本人だけ
+-- profiles：参加者なら誰でも読める。変更・作成は本人だけ
 drop policy if exists "profiles_select" on public.profiles;
 create policy "profiles_select" on public.profiles
-  for select to authenticated using (true);
+  for select to authenticated using (public.is_member());
 
 drop policy if exists "profiles_insert_own" on public.profiles;
 create policy "profiles_insert_own" on public.profiles
-  for insert to authenticated with check (id = auth.uid());
+  for insert to authenticated with check (id = auth.uid() and public.is_member());
 
 drop policy if exists "profiles_update_own" on public.profiles;
 create policy "profiles_update_own" on public.profiles
-  for update to authenticated using (id = auth.uid()) with check (id = auth.uid());
+  for update to authenticated using (id = auth.uid() and public.is_member()) with check (id = auth.uid() and public.is_member());
 
--- cats：ログイン中なら誰でも読める。作成・更新・削除は持ち主だけ
+-- cats：参加者なら誰でも読める。作成・更新・削除は持ち主だけ
 drop policy if exists "cats_select" on public.cats;
 create policy "cats_select" on public.cats
-  for select to authenticated using (true);
+  for select to authenticated using (public.is_member());
 
 drop policy if exists "cats_insert_own" on public.cats;
 create policy "cats_insert_own" on public.cats
-  for insert to authenticated with check (owner_id = auth.uid());
+  for insert to authenticated with check (owner_id = auth.uid() and public.is_member());
 
 drop policy if exists "cats_update_own" on public.cats;
 create policy "cats_update_own" on public.cats
-  for update to authenticated using (owner_id = auth.uid()) with check (owner_id = auth.uid());
+  for update to authenticated using (owner_id = auth.uid() and public.is_member()) with check (owner_id = auth.uid() and public.is_member());
 
 drop policy if exists "cats_delete_own" on public.cats;
 create policy "cats_delete_own" on public.cats
-  for delete to authenticated using (owner_id = auth.uid());
+  for delete to authenticated using (owner_id = auth.uid() and public.is_member());
 
 -- collections：自分の行だけ読める・消せる。追加は「自分の猫以外」だけ
 drop policy if exists "collections_select_own" on public.collections;
@@ -177,6 +261,7 @@ create policy "collections_insert_own" on public.collections
   for insert to authenticated
   with check (
     user_id = auth.uid()
+    and public.is_member()
     and not exists (
       select 1 from public.cats c where c.id = cat_id and c.owner_id = auth.uid()
     )
@@ -226,15 +311,15 @@ create policy "cat_stickers_read" on storage.objects
 drop policy if exists "cat_stickers_insert_own" on storage.objects;
 create policy "cat_stickers_insert_own" on storage.objects
   for insert to authenticated
-  with check (bucket_id = 'cat-stickers' and (storage.foldername(name))[1] = auth.uid()::text);
+  with check (bucket_id = 'cat-stickers' and (storage.foldername(name))[1] = auth.uid()::text and public.is_member());
 
 drop policy if exists "cat_stickers_update_own" on storage.objects;
 create policy "cat_stickers_update_own" on storage.objects
   for update to authenticated
-  using (bucket_id = 'cat-stickers' and (storage.foldername(name))[1] = auth.uid()::text)
-  with check (bucket_id = 'cat-stickers' and (storage.foldername(name))[1] = auth.uid()::text);
+  using (bucket_id = 'cat-stickers' and (storage.foldername(name))[1] = auth.uid()::text and public.is_member())
+  with check (bucket_id = 'cat-stickers' and (storage.foldername(name))[1] = auth.uid()::text and public.is_member());
 
 drop policy if exists "cat_stickers_delete_own" on storage.objects;
 create policy "cat_stickers_delete_own" on storage.objects
   for delete to authenticated
-  using (bucket_id = 'cat-stickers' and (storage.foldername(name))[1] = auth.uid()::text);
+  using (bucket_id = 'cat-stickers' and (storage.foldername(name))[1] = auth.uid()::text and public.is_member());

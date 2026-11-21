@@ -2,6 +2,7 @@
 // どの関数も「クラウド未設定 or 未ログイン」のときは安全に何もしない／空を返す。
 // 端末内(IndexedDB)が自分の猫の正本。クラウドは共有用のコピー。
 import { addCat, getCat, listCats, updateCat, type CatRecord } from "./db";
+import { checkMember } from "./membership";
 import { getSupabase } from "./supabase";
 
 // ---- 行の型（supabase/schema.sql と対応。手書き） ----
@@ -38,13 +39,15 @@ function requireClient() {
   return sb;
 }
 
-/** ログイン中のユーザー id（未ログイン・未設定なら null） */
+/** 合言葉で参加済みのユーザー id（未ログイン・未参加・未設定なら null） */
 export async function currentUserId(): Promise<string | null> {
   const sb = getSupabase();
   if (!sb) return null;
   try {
     const { data } = await sb.auth.getSession();
-    return data.session?.user.id ?? null;
+    const uid = data.session?.user.id ?? null;
+    if (!uid) return null;
+    return (await checkMember(uid)) ? uid : null;
   } catch {
     return null;
   }
