@@ -15,10 +15,32 @@ export type CatRecord = {
   remote_id?: string | null; // 将来のクラウド同期用
 };
 
+// iPhone のホーム画面アプリ（PWA）では、IndexedDB に Blob をそのまま入れると
+// 「Error preparing Blob/File data to be stored in object store」で失敗することがある（WebKit の不具合）。
+// そこで画像は「バイト列（ArrayBuffer）＋種類」の形で保存し、読み出すときに Blob に戻す。
+// 以前 Blob のまま保存した猫も、そのまま読めるようにしてある。
+type StoredSticker = Blob | { bytes: ArrayBuffer; type: string };
+type StoredCat = Omit<CatRecord, "sticker"> & { sticker: StoredSticker };
+
+async function toStored(cat: CatRecord): Promise<StoredCat> {
+  const sticker = cat.sticker as StoredSticker;
+  if (!(sticker instanceof Blob)) return cat as StoredCat;
+  return { ...cat, sticker: { bytes: await sticker.arrayBuffer(), type: sticker.type || "image/png" } };
+}
+
+function fromStored(cat: StoredCat): CatRecord;
+function fromStored(cat: StoredCat | undefined): CatRecord | undefined;
+function fromStored(cat: StoredCat | undefined): CatRecord | undefined {
+  if (!cat) return undefined;
+  const s = cat.sticker;
+  if (s instanceof Blob) return cat as CatRecord;
+  return { ...cat, sticker: new Blob([s.bytes], { type: s.type }) };
+}
+
 interface NekorekuDB extends DBSchema {
   cats: {
     key: string;
-    value: CatRecord;
+    value: StoredCat;
     indexes: { caught_at: string };
   };
 }
@@ -40,34 +62,35 @@ function getDb() {
 
 export async function addCat(cat: CatRecord): Promise<void> {
   const db = await getDb();
-  await db.put("cats", cat);
+  const stored = await toStored(cat); // await はトランザクションを開く前に済ませる
+  await db.put("cats", stored);
 }
 
 /** 新しい順の一覧 */
 export async function listCats(): Promise<CatRecord[]> {
   const db = await getDb();
   const all = await db.getAllFromIndex("cats", "caught_at");
-  return all.reverse();
+  return all.reverse().map((c) => fromStored(c));
 }
 
 /** 一番新しい1匹（カメラ画面のサムネ用。全件読まずに済む） */
 export async function latestCat(): Promise<CatRecord | undefined> {
   const db = await getDb();
   const cursor = await db.transaction("cats").store.index("caught_at").openCursor(null, "prev");
-  return cursor?.value;
+  return fromStored(cursor?.value);
 }
 
 export async function getCat(id: string): Promise<CatRecord | undefined> {
   const db = await getDb();
-  return db.get("cats", id);
+  return fromStored(await db.get("cats", id));
 }
 
 export async function updateCat(id: string, patch: Partial<Omit<CatRecord, "id">>) {
   const db = await getDb();
-  const cur = await db.get("cats", id);
+  const cur = fromStored(await db.get("cats", id));
   if (!cur) return undefined;
-  const next = { ...cur, ...patch };
-  await db.put("cats", next);
+  const next: CatRecord = { ...cur, ...patch };
+  await db.put("cats", await toStored(next));
   return next;
 }
 

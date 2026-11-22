@@ -118,7 +118,9 @@ export default function CaptureSheet({
       router.push(`/cat/${id}`);
     } catch (e) {
       console.error(e);
-      setErrorMsg("保存に失敗しました。もう一度お試しください。");
+      // 原因を調べられるように、エラーの種類も小さく出す
+      const detail = e instanceof Error ? `${e.name}: ${e.message}`.slice(0, 120) : String(e).slice(0, 120);
+      setErrorMsg(`保存に失敗しました。もう一度お試しください。（${detail}）`);
       setPhase("error");
       setSaving(false);
     }
