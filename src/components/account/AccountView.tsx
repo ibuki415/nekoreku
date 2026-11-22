@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useSession } from "@/hooks/useSession";
-import { fetchProfile, importMyCats, updateDisplayName, uploadUnsynced } from "@/lib/cloud";
+import { describeError, fetchProfile, importMyCats, updateDisplayName, uploadUnsynced } from "@/lib/cloud";
 import { listCats } from "@/lib/db";
 import { joinWithPassphrase } from "@/lib/membership";
 import { getSupabase, isCloudEnabled } from "@/lib/supabase";
@@ -193,9 +193,13 @@ function Profile({ userId }: { userId: string }) {
     setSyncMsg("");
     try {
       const r = await uploadUnsynced(userId, (d, t) => setSyncMsg(`保存中… ${d}/${t}`));
-      setSyncMsg(r.failed ? `${r.ok}匹を保存、${r.failed}匹は失敗しました。もう一度試せます。` : `${r.ok}匹をクラウドに保存しました。`);
-    } catch {
-      setSyncMsg("保存できませんでした。通信状況を確認してください。");
+      setSyncMsg(
+        r.failed
+          ? `${r.ok}匹を保存、${r.failed}匹は失敗しました。もう一度試せます。（理由: ${r.firstError ?? "不明"}）`
+          : `${r.ok}匹をクラウドに保存しました。`,
+      );
+    } catch (e) {
+      setSyncMsg(`保存できませんでした。通信状況を確認してください。（理由: ${describeError(e)}）`);
     } finally {
       setSyncing(false);
       void refreshCounts();

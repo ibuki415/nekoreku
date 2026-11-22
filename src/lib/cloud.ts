@@ -83,7 +83,7 @@ export async function uploadCat(userId: string, cat: CatRecord): Promise<void> {
     contentType: "image/png",
     upsert: true,
   });
-  if (up.error) throw up.error;
+  if (up.error) throw new Error(`画像: ${describeError(up.error)}`);
 
   const { error } = await sb.from("cats").upsert(
     {
@@ -100,7 +100,7 @@ export async function uploadCat(userId: string, cat: CatRecord): Promise<void> {
     },
     { onConflict: "id" },
   );
-  if (error) throw error;
+  if (error) throw new Error(`データ: ${describeError(error)}`);
   await updateCat(cat.id, { remote_id: cat.id });
 }
 
@@ -149,10 +149,11 @@ export async function syncDelete(cat: CatRecord): Promise<void> {
 export async function uploadUnsynced(
   userId: string,
   onProgress?: (done: number, total: number) => void,
-): Promise<{ ok: number; failed: number }> {
+): Promise<{ ok: number; failed: number; firstError?: string }> {
   const targets = (await listCats()).filter((c) => !c.remote_id);
   let ok = 0;
   let failed = 0;
+  let firstError: string | undefined;
   for (const cat of targets) {
     try {
       await uploadCat(userId, cat);
@@ -160,10 +161,19 @@ export async function uploadUnsynced(
     } catch (e) {
       console.error(e);
       failed++;
+      firstError ??= describeError(e);
     }
     onProgress?.(ok + failed, targets.length);
   }
-  return { ok, failed };
+  return { ok, failed, firstError };
+}
+
+/** supabase-js などのエラーを、原因を調べられる短い文字にする */
+export function describeError(e: unknown): string {
+  const err = e as { name?: string; message?: string; code?: string; statusCode?: string | number; status?: number } | null;
+  if (!err) return "不明なエラー";
+  const parts = [err.code, err.statusCode ?? err.status, err.message].filter((v) => v !== undefined && v !== "");
+  return (parts.length ? parts.join(" ") : String(e)).slice(0, 160);
 }
 
 /** クラウドにある自分の猫のうち、端末内に無いものを取り込む（別端末でログインしたとき用） */
